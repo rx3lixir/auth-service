@@ -14,15 +14,34 @@ const (
 	blacklistPrefix = "blacklist:"
 )
 
+// Close закрывает соединение с Redis
 func (s *RedisStore) Close() error {
 	return s.client.Close()
 }
 
 // CreateSession создает новую сессию в Redis
 func (s *RedisStore) CreateSession(ctx context.Context, session *Session) (*Session, error) {
+	// Проверяем обязательные поля
+	if session.Id == "" {
+		return nil, fmt.Errorf("session ID is required")
+	}
+
+	if session.UserEmail == "" {
+		return nil, fmt.Errorf("user email is required")
+	}
+
+	if session.RefreshToken == "" {
+		return nil, fmt.Errorf("refresh token is required")
+	}
+
 	// Если время создания не установлено, устанавливаем текущее время
 	if session.CreatedAt.IsZero() {
 		session.CreatedAt = time.Now()
+	}
+
+	// Если время истечения не установлено, возвращаем ошибку
+	if session.ExpiresAt.IsZero() {
+		return nil, fmt.Errorf("expiration time is required")
 	}
 
 	sessionData, err := json.Marshal(session)
@@ -46,6 +65,10 @@ func (s *RedisStore) CreateSession(ctx context.Context, session *Session) (*Sess
 
 // GetSession получает сессию из Redis по ID
 func (s *RedisStore) GetSession(ctx context.Context, id string) (*Session, error) {
+	if id == "" {
+		return nil, fmt.Errorf("session ID is required")
+	}
+
 	key := sessionPrefix + id
 
 	sessionData, err := s.client.Get(ctx, key).Result()
@@ -66,10 +89,19 @@ func (s *RedisStore) GetSession(ctx context.Context, id string) (*Session, error
 
 // RevokeSession отзывает сессию, добавляя токен в черный список
 func (s *RedisStore) RevokeSession(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("session ID is required")
+	}
+
 	// Получаем сессию
 	session, err := s.GetSession(ctx, id)
 	if err != nil {
 		return err
+	}
+
+	// Проверяем, не отозвана ли сессия уже
+	if session.IsRevoked {
+		return fmt.Errorf("session is already revoked")
 	}
 
 	// Добавляем refresh токен в черный список
@@ -102,6 +134,10 @@ func (s *RedisStore) RevokeSession(ctx context.Context, id string) error {
 
 // DeleteSession удаляет сессию из Redis
 func (s *RedisStore) DeleteSession(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("session ID is required")
+	}
+
 	// Получаем сессию, чтобы добавить токен в черный список перед удалением
 	session, err := s.GetSession(ctx, id)
 	if err != nil {
@@ -130,6 +166,10 @@ func (s *RedisStore) DeleteSession(ctx context.Context, id string) error {
 
 // IsTokenBlacklisted проверяет, находится ли токен в черном списке
 func (s *RedisStore) IsTokenBlacklisted(ctx context.Context, token string) (bool, error) {
+	if token == "" {
+		return false, fmt.Errorf("token is required")
+	}
+
 	key := blacklistPrefix + token
 	exists, err := s.client.Exists(ctx, key).Result()
 	if err != nil {

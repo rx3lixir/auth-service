@@ -1,6 +1,11 @@
 package server
 
 import (
+	"context"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	authPb "github.com/rx3lixir/auth-service/auth-grpc/gen/go"
 	"github.com/rx3lixir/auth-service/internal/db"
 )
@@ -16,148 +21,76 @@ func NewServer(storer *db.RedisStore) *Server {
 	}
 }
 
-func (s *APIServer) handleLoginUser(w http.ResponseWriter, r *http.Request) error {
-	loginRequest := new(models.LoginUserReq)
+// CreateSession создает новую сессию
+func (s *Server) CreateSession(ctx context.Context, req *authPb.SessionReq) (*authPb.SessionRes, error) {
+	session := ConvertProtoToSession(req)
 
-	if err := json.NewDecoder(r.Body).Decode(loginRequest); err != nil {
-		WriteJSON(w, http.StatusBadRequest, "error decoding request body")
-		return err
+	// Проверка обязательных полей
+	if session.UserEmail == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_email is required")
 	}
 
-	user, err := s.store.GetUserByEmail(s.dbContext, loginRequest.Email)
+	if session.Id == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+
+	createdSession, err := s.storer.CreateSession(ctx, session)
 	if err != nil {
-		WriteJSON(w, http.StatusBadRequest, "no user found with such email")
-		return err
+		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
 	}
-
-	ok := password.Verify(loginRequest.Password, user.Password)
-	if !ok {
-		WriteJSON(w, http.StatusUnauthorized, "password is invalid")
-		return err
-	}
-
-	accessToken, accessClaims, err := s.TokenMaker.CreateToken(user.Id, user.Email, user.IsAdmin, time.Minute*15)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error creating token")
-		return err
-	}
-
-	refreshToken, refreshClaims, err := s.TokenMaker.CreateToken(user.Id, user.Email, user.IsAdmin, time.Hour*24)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error creating token")
-		return err
-	}
-
-	session, err := s.sessions.CreateSession(s.dbContext, &models.Session{
-		Id:           refreshClaims.RegisteredClaims.ID,
-		UserEmail:    user.Email,
-		RefreshToken: refreshToken,
-		IsRevoked:    false,
-		ExpiresAt:    refreshClaims.RegisteredClaims.ExpiresAt.Time,
-	})
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error creating session")
-		return err
-	}
-
-	res := models.LoginUserRes{
-		SessionId:            session.Id,
-		AccessToken:          accessToken,
-		RefreshToken:         refreshToken,
-		AccessTokenExpiresAt: accessClaims.RegisteredClaims.ExpiresAt.Time,
-		User: models.GetUserRes{
-			Name:    user.Name,
-			Email:   user.Email,
-			IsAdmin: user.IsAdmin,
-		},
-	}
-
-	WriteJSON(w, http.StatusOK, res)
-
-	return nil
+	return ConvertSessionToProto(createdSession), nil
 }
 
-func (s *APIServer) handleLogoutUser(w http.ResponseWriter, r *http.Request) error {
-	claims := r.Context().Value(authKey{}).(*token.UserClaims)
-
-	err := s.sessions.DeleteSession(s.dbContext, claims.RegisteredClaims.ID)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error deleting session")
-		return err
+// GetSession получает сессию по ID
+func (s *Server) GetSession(ctx context.Context, req *authPb.SessionReq) (*authPb.SessionRes, error) {
+	if req.Id == "" {
+		return nil, status.Error(codes.InvalidArgument, "session id is required")
 	}
 
-	WriteJSON(w, http.StatusNoContent, "deleted successfully")
+	session, err := s.storer.GetSession(ctx, req.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
+	}
 
-	return nil
+	return ConvertSessionToProto(session), nil
 }
 
-func (s *APIServer) handleRenewAcessToken(w http.ResponseWriter, r *http.Request) error {
-	req := new(models.RenewAccessTokenReq)
-
-	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
-		WriteJSON(w, http.StatusBadRequest, "error decoding request body")
-		return err
+// Revoke session отзывает сессию
+func (s *Server) RevokeSession(ctx context.Context, req *authPb.SessionReq) (*authPb.SessionRes, error) {
+	if req.Id == "" {
+		return nil, status.Error(codes.InvalidArgument, "session id is required")
 	}
 
-	// Проверка, не находится ли токен в черном списке
-	isBlacklisted, err := s.sessions.IsTokenBlacklisted(s.dbContext, req.RefershToken)
+	// Перед отзывом получаем текущую сессию
+	session, err := s.storer.GetSession(ctx, req.Id)
 	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error checking token status")
-		return err
+		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
 	}
 
-	if isBlacklisted {
-		WriteJSON(w, http.StatusUnauthorized, "token is revoked")
-		return fmt.Errorf("token is blacklisted")
+	if err := s.storer.RevokeSession(ctx, req.Id); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to revoke session: %v", err)
 	}
 
-	refreshClaims, err := s.TokenMaker.VerifyToken(req.RefershToken)
-	if err != nil {
-		WriteJSON(w, http.StatusUnauthorized, "error verifying token")
-		return err
-	}
+	// Обновляем статус сессии в ответе
+	session.IsRevoked = true
 
-	session, err := s.sessions.GetSession(s.dbContext, refreshClaims.RegisteredClaims.ID)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error getting session")
-		return err
-	}
-
-	if session.IsRevoked {
-		WriteJSON(w, http.StatusUnauthorized, "session is already revoked")
-		return nil
-	}
-
-	if session.UserEmail != refreshClaims.Email {
-		WriteJSON(w, http.StatusUnauthorized, "session is invalid")
-		return nil
-	}
-
-	accessToken, accessClaims, err := s.TokenMaker.CreateToken(refreshClaims.Id, refreshClaims.Email, refreshClaims.IsAdmin, time.Minute*15)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error creating token")
-		return nil
-	}
-
-	res := models.RenewAccessTokenRes{
-		AccessToken:          accessToken,
-		AccessTokenExpiresAt: accessClaims.RegisteredClaims.ExpiresAt.Time,
-	}
-
-	WriteJSON(w, http.StatusOK, res)
-
-	return nil
+	return ConvertSessionToProto(session), nil
 }
 
-func (s *APIServer) handleRevokeSession(w http.ResponseWriter, r *http.Request) error {
-	claims := r.Context().Value(authKey{}).(*token.UserClaims)
-
-	err := s.sessions.RevokeSession(s.dbContext, claims.RegisteredClaims.ID)
-	if err != nil {
-		WriteJSON(w, http.StatusInternalServerError, "error revoking session")
-		return err
+// DeleteSession удаляет сессию
+func (s *Server) DeleteSession(ctx context.Context, req *authPb.SessionReq) (*authPb.SessionRes, error) {
+	if req.Id == "" {
+		return nil, status.Error(codes.InvalidArgument, "session id is required")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
-	return nil
+	session, err := s.storer.GetSession(ctx, req.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
+	}
+
+	if err := s.storer.DeleteSession(ctx, req.Id); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete session: %v", err)
+	}
+
+	return ConvertSessionToProto(session), nil
 }
