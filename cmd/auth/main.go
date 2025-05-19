@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -12,15 +12,25 @@ import (
 	"github.com/rx3lixir/auth-service/auth-grpc/server"
 	"github.com/rx3lixir/auth-service/internal/config"
 	"github.com/rx3lixir/auth-service/internal/db"
+	"github.com/rx3lixir/auth-service/internal/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 func main() {
-	// Настраиваем логирование
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+	// Загрузка конфигурации
+	c, err := config.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка загрузки конфигурации: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Инициализация логгера
+	logger.Init(c.Service.Env)
+	defer logger.Close()
+
+	// Создаем экземпляр логгера для передачи компонентам
+	log := logger.NewLogger()
 
 	// Создаем контекст, который можно отменить при получении сигнала остановки
 	ctx, cancel := context.WithCancel(context.Background())
@@ -31,30 +41,23 @@ func main() {
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalCh
-		slog.Info("Shutting down gracefully...")
+		log.Info("Shutting down gracefully...")
 		cancel()
 	}()
-
-	// Загрузка конфигурации
-	c, err := config.New()
-	if err != nil {
-		slog.Error("error creating config file", "error", err)
-		os.Exit(1)
-	}
 
 	// Создание Redis хранилища
 	redisStore, err := db.NewRedisStore(c.Redis.RedisURL(), ctx)
 	if err != nil {
-		slog.Error("Failed to initialize Redis store", "error", err)
+		log.Error("Failed to initialize Redis store", "error", err)
 		os.Exit(1)
 	}
 	defer redisStore.Close()
 
-	slog.Info("Successfultty connected to Redis")
+	log.Info("Successfully connected to Redis")
 
 	// Создание grpc сервера
 	grpcServer := grpc.NewServer()
-	authServer := server.NewServer(redisStore)
+	authServer := server.NewServer(redisStore, log, c)
 	authPb.RegisterAuthServiceServer(grpcServer, authServer)
 
 	// Включение reflection для отладки
@@ -62,11 +65,11 @@ func main() {
 
 	listener, err := net.Listen("tcp", c.Server.Address)
 	if err != nil {
-		slog.Error("Failed to start listener", "error", err)
+		log.Error("Failed to start listener", "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("Server is listening", "address", c.Server.Address)
+	log.Info("Server is listening", "address", c.Server.Address)
 
 	// Запускаем сервер в горутине
 	serverError := make(chan error, 1)
@@ -78,8 +81,8 @@ func main() {
 	select {
 	case <-ctx.Done():
 		grpcServer.GracefulStop()
-		slog.Info("Server stopped gracefully")
+		log.Info("Server stopped gracefully")
 	case err := <-serverError:
-		slog.Error("Server error", "error", err)
+		log.Error("Server error", "error", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/spf13/viper"
@@ -11,11 +12,13 @@ import (
 
 // Константы для ключей конфигурации
 const (
-	envKey           = "service_params.env"
-	secretKey        = "server_params.secret_key"
-	redisURLKey      = "redis_params.url"
-	redisPasswordKey = "redis_params.password"
-	serviceAddress   = "server_params.address"
+	envKey                = "service_params.env"
+	secretKey             = "server_params.secret_key"
+	redisURLKey           = "redis_params.url"
+	redisPasswordKey      = "redis_params.password"
+	serviceAddress        = "server_params.address"
+	sessionTTLDaysKey     = "service_params.session_ttl_days"
+	accessTokenTTLMinsKey = "service_params.access_token_ttl_mins"
 )
 
 // AppConfig представляет конфигурацию всего приложения
@@ -27,7 +30,9 @@ type AppConfig struct {
 
 // ApplicationParams содержит общие параметры приложения
 type ServiceParams struct {
-	Env string `mapstructure:"env" validate:"required,oneof=dev prod test"`
+	Env                string `mapstructure:"env" validate:"required,oneof=dev prod test"`
+	SessionTTLDays     int    `mapstructure:"session_ttl_days" validate:"required,min=1,max=30"`
+	AccessTokenTTLMins int    `mapstructure:"access_token_ttl_mins" validate:"required,min=5,max=60"`
 }
 
 type ServerParams struct {
@@ -58,14 +63,26 @@ func (r *RedisParams) RedisURL() string {
 	return fmt.Sprintf("redis://%s", r.URL)
 }
 
+// GetSessionTTL возвращает время жизни сессии в виде Duration
+func (s *ServiceParams) GetSessionTTL() time.Duration {
+	return time.Hour * 24 * time.Duration(s.SessionTTLDays)
+}
+
+// GetAccessTokenTTL возвращает время жизни access токена в виде Duration
+func (s *ServiceParams) GetAccessTokenTTL() time.Duration {
+	return time.Minute * time.Duration(s.AccessTokenTTLMins)
+}
+
 // EnvBindings возвращает мапу ключей конфигурации и соответствующих им переменных окружения
 func envBindings() map[string]string {
 	return map[string]string{
-		envKey:           "SERVICE_KEY",
-		serviceAddress:   "SERVICE_ADDRESS",
-		secretKey:        "SECRET_KEY",
-		redisURLKey:      "REDIS_URL",
-		redisPasswordKey: "REDIS_PASSWORD",
+		envKey:                "SERVICE_KEY",
+		serviceAddress:        "SERVICE_ADDRESS",
+		secretKey:             "SECRET_KEY",
+		redisURLKey:           "REDIS_URL",
+		redisPasswordKey:      "REDIS_PASSWORD",
+		sessionTTLDaysKey:     "SESSION_TTL_DAYS",
+		accessTokenTTLMinsKey: "ACCESS_TOKEN_TTL_MINS",
 	}
 }
 
