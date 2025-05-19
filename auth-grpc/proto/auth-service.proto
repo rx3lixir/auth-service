@@ -22,7 +22,7 @@ message SessionRes {
   google.protobuf.Timestamp expires_at = 5;
 }
 
-service auth {
+service AuthService {
   rpc CreateSession(SessionReq) returns (SessionRes) {}
   rpc GetSession(SessionReq) returns (SessionRes) {}
   rpc RevokeSession(SessionReq) returns (SessionRes) {}

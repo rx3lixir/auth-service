@@ -40,6 +40,5 @@ func ConvertProtoToSession(sessionReq *authPb.SessionReq) *db.Session {
 		RefreshToken: sessionReq.RefreshToken,
 		IsRevoked:    sessionReq.IsRevoked,
 		ExpiresAt:    expiresAt,
-		CreatedAt:    time.Now(),
 	}
 }

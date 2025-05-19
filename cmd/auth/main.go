@@ -55,7 +55,7 @@ func main() {
 	// Создание grpc сервера
 	grpcServer := grpc.NewServer()
 	authServer := server.NewServer(redisStore)
-	authPb.RegisterAuthServer(grpcServer, authServer)
+	authPb.RegisterAuthServiceServer(grpcServer, authServer)
 
 	// Включение reflection для отладки
 	reflection.Register(grpcServer)
@@ -82,5 +82,4 @@ func main() {
 	case err := <-serverError:
 		slog.Error("Server error", "error", err)
 	}
-
 }

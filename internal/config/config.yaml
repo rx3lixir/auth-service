@@ -1,8 +1,8 @@
-sevice_params:
+service_params:
   env: dev
-server_params:
-  address: localhost:3000
-  secret_key: 36080001349340267925113477454910
 redis_params:
   url: localhost:6379
   password: ""
+server_params:
+  address: 0.0.0.0:9092
+  secret_key: 36080001349340267925113477454910

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -12,7 +13,7 @@ import (
 
 type Server struct {
 	storer *db.RedisStore
-	authPb.UnimplementedAuthServer
+	authPb.UnsafeAuthServiceServer
 }
 
 func NewServer(storer *db.RedisStore) *Server {
@@ -33,6 +34,8 @@ func (s *Server) CreateSession(ctx context.Context, req *authPb.SessionReq) (*au
 	if session.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
+
+	session.ExpiresAt = time.Now().Add(time.Minute * 15)
 
 	createdSession, err := s.storer.CreateSession(ctx, session)
 	if err != nil {
