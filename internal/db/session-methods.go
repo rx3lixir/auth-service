@@ -12,6 +12,7 @@ import (
 const (
 	sessionPrefix   = "session:"
 	blacklistPrefix = "blacklist:"
+	userSessionsIdx = "user_sessions:" // Новый префикс для индекса пользовательских сессий
 )
 
 // Close закрывает соединение с Redis
@@ -60,6 +61,22 @@ func (s *RedisStore) CreateSession(ctx context.Context, session *Session) (*Sess
 		return nil, fmt.Errorf("failed to save session to Redis: %w", err)
 	}
 
+	// Добавляем sessionID в список сессий пользователя
+	userSessionsKey := userSessionsIdx + session.UserEmail
+	if err := s.client.SAdd(ctx, userSessionsKey, session.Id).Err(); err != nil {
+		// Если не удалось добавить в индекс, удаляем созданную сессию
+		s.client.Del(ctx, key)
+		return nil, fmt.Errorf("failed to index session for user: %w", err)
+	}
+
+	// Устанавливаем TTL для индекса такой же, как для сессии
+	if err := s.client.Expire(ctx, userSessionsKey, ttl).Err(); err != nil {
+		// Если не удалось установить TTL для индекса, удаляем созданную сессию
+		s.client.Del(ctx, key)
+		s.client.SRem(ctx, userSessionsKey, session.Id)
+		return nil, fmt.Errorf("failed to set expiration for user sessions index: %w", err)
+	}
+
 	return session, nil
 }
 
@@ -85,6 +102,62 @@ func (s *RedisStore) GetSession(ctx context.Context, id string) (*Session, error
 	}
 
 	return &session, nil
+}
+
+// GetSessionsByEmail получает все активные сессии пользователя по email
+func (s *RedisStore) GetSessionsByEmail(ctx context.Context, email string) ([]*Session, error) {
+	if email == "" {
+		return nil, fmt.Errorf("user email is required")
+	}
+
+	// Получаем список ID сессий пользователя
+	userSessionsKey := userSessionsIdx + email
+	sessionIDs, err := s.client.SMembers(ctx, userSessionsKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user sessions: %w", err)
+	}
+
+	if len(sessionIDs) == 0 {
+		return []*Session{}, nil // Возвращаем пустой список, если сессий нет
+	}
+
+	// Формируем ключи для команды MGET
+	keys := make([]string, len(sessionIDs))
+	for i, id := range sessionIDs {
+		keys[i] = sessionPrefix + id
+	}
+
+	// Получаем данные всех сессий одним запросом
+	sessionDataList, err := s.client.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sessions data: %w", err)
+	}
+
+	// Десериализуем сессии
+	sessions := make([]*Session, 0, len(sessionDataList))
+	for _, sessionData := range sessionDataList {
+		if sessionData == nil {
+			continue // Пропускаем отсутствующие сессии
+		}
+
+		var session Session
+		sessionStr, ok := sessionData.(string)
+		if !ok {
+			continue // Пропускаем неверные данные
+		}
+
+		if err := json.Unmarshal([]byte(sessionStr), &session); err != nil {
+			continue // Пропускаем поврежденные данные
+		}
+
+		// Проверяем, что сессия действительно принадлежит запрашиваемому пользователю
+		// и не отозвана
+		if session.UserEmail == email && !session.IsRevoked {
+			sessions = append(sessions, &session)
+		}
+	}
+
+	return sessions, nil
 }
 
 // RevokeSession отзывает сессию, добавляя токен в черный список
@@ -153,6 +226,12 @@ func (s *RedisStore) DeleteSession(ctx context.Context, id string) error {
 
 	if err := s.client.Set(ctx, blacklistKey, "deleted", ttl).Err(); err != nil {
 		return fmt.Errorf("failed to add token to blacklist: %w", err)
+	}
+
+	// Удаляем сессию из индекса пользователя
+	userSessionsKey := userSessionsIdx + session.UserEmail
+	if err := s.client.SRem(ctx, userSessionsKey, id).Err(); err != nil {
+		return fmt.Errorf("failed to remove session from user index: %w", err)
 	}
 
 	// Удаляем сессию

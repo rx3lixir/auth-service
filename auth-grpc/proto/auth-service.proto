@@ -14,6 +14,10 @@ message SessionReq {
   google.protobuf.Timestamp expires_at = 5;
 }
 
+message GetSessionByEmailReq { string user_email = 1; }
+
+message SessionListRes { repeated SessionRes sessions = 1; }
+
 message SessionRes {
   string id = 1;
   string user_email = 2;
@@ -25,6 +29,7 @@ message SessionRes {
 service AuthService {
   rpc CreateSession(SessionReq) returns (SessionRes) {}
   rpc GetSession(SessionReq) returns (SessionRes) {}
+  rpc GetSessionByEmail(GetSessionByEmailReq) returns (SessionListRes) {}
   rpc RevokeSession(SessionReq) returns (SessionRes) {}
   rpc DeleteSession(SessionReq) returns (SessionRes) {}
 }

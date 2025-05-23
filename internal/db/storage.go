@@ -11,6 +11,7 @@ import (
 type SessionStorage interface {
 	CreateSession(ctx context.Context, session *Session) (*Session, error)
 	GetSession(ctx context.Context, id string) (*Session, error)
+	GetSessionsByEmail(ctx context.Context, email string) ([]*Session, error)
 	RevokeSession(ctx context.Context, id string) error
 	DeleteSession(ctx context.Context, id string) error
 	IsTokenBlacklisted(ctx context.Context, token string) (bool, error)

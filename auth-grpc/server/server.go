@@ -111,6 +111,49 @@ func (s *Server) GetSession(ctx context.Context, req *authPb.SessionReq) (*authP
 	return ConvertSessionToProto(session), nil
 }
 
+// GetSessionByEmail получает все активные сессии пользователя по его email
+func (s *Server) GetSessionByEmail(ctx context.Context, req *authPb.GetSessionByEmailReq) (*authPb.SessionListRes, error) {
+	s.log.Info("starting get sessions by email",
+		"method", "GetSessionByEmail",
+		"user_email", req.UserEmail,
+	)
+
+	if req.UserEmail == "" {
+		s.log.Error("missing required field",
+			"method", "GetSessionByEmail",
+			"missing_field", "user_email",
+		)
+		return nil, status.Error(codes.InvalidArgument, "user email is required")
+	}
+
+	sessions, err := s.storer.GetSessionsByEmail(ctx, req.UserEmail)
+	if err != nil {
+		s.log.Error("failed to get sessions",
+			"method", "GetSessionByEmail",
+			"user_email", req.UserEmail,
+			"error", err,
+		)
+		return nil, status.Errorf(codes.Internal, "failed to get sessions: %v", err)
+	}
+
+	// Преобразуем массив сессий в ответ
+	sessionListRes := &authPb.SessionListRes{
+		Sessions: make([]*authPb.SessionRes, 0, len(sessions)),
+	}
+
+	for _, session := range sessions {
+		sessionListRes.Sessions = append(sessionListRes.Sessions, ConvertSessionToProto(session))
+	}
+
+	s.log.Info("sessions retrieved successfully",
+		"method", "GetSessionByEmail",
+		"user_email", req.UserEmail,
+		"sessions_count", len(sessionListRes.Sessions),
+	)
+
+	return sessionListRes, nil
+}
+
 // RevokeSession отзывает сессию
 func (s *Server) RevokeSession(ctx context.Context, req *authPb.SessionReq) (*authPb.SessionRes, error) {
 	s.log.Info("starting revoke session",
