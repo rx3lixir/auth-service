@@ -10,7 +10,7 @@ import (
 	authPb "github.com/rx3lixir/auth-service/auth-grpc/gen/go"
 	"github.com/rx3lixir/auth-service/internal/config"
 	"github.com/rx3lixir/auth-service/internal/db"
-	"github.com/rx3lixir/auth-service/internal/logger"
+	"github.com/rx3lixir/auth-service/pkg/logger"
 )
 
 type Server struct {

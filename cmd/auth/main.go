@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	authPb "github.com/rx3lixir/auth-service/auth-grpc/gen/go"
 	"github.com/rx3lixir/auth-service/auth-grpc/server"
 	"github.com/rx3lixir/auth-service/internal/config"
 	"github.com/rx3lixir/auth-service/internal/db"
-	"github.com/rx3lixir/auth-service/internal/logger"
+	"github.com/rx3lixir/auth-service/pkg/health"
+	"github.com/rx3lixir/auth-service/pkg/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -29,7 +31,6 @@ func main() {
 	logger.Init(c.Service.Env)
 	defer logger.Close()
 
-	// Создаем экземпляр логгера для передачи компонентам
 	log := logger.NewLogger()
 
 	// Создаем контекст, который можно отменить при получении сигнала остановки
@@ -39,11 +40,13 @@ func main() {
 	// Настраиваем обработку сигналов для грациозного завершения
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-signalCh
-		log.Info("Shutting down gracefully...")
-		cancel()
-	}()
+
+	// Логаем инфу для отладки
+	log.Info("Configuration loaded",
+		"env", c.Service.Env,
+		"redis_url", c.Redis.URL,
+		"server_address", c.Server.Address,
+	)
 
 	// Создание Redis хранилища
 	redisStore, err := db.NewRedisStore(c.Redis.RedisURL(), ctx)
@@ -63,6 +66,7 @@ func main() {
 	// Включение reflection для отладки
 	reflection.Register(grpcServer)
 
+	// Запуск gRPC сервера
 	listener, err := net.Listen("tcp", c.Server.Address)
 	if err != nil {
 		log.Error("Failed to start listener", "error", err)
@@ -71,18 +75,46 @@ func main() {
 
 	log.Info("Server is listening", "address", c.Server.Address)
 
-	// Запускаем сервер в горутине
-	serverError := make(chan error, 1)
+	// Создаем HealthCheck сервер
+	healthServer := health.NewServer(redisStore, log,
+		health.WithServiceName("auth-service"),
+		health.WithVersion("1.0.0"),
+		health.WithPort(":8082"),
+		health.WithTimeout(5*time.Second),
+	)
+
+	// Запускаем серверы
+	errCh := make(chan error, 2)
+
+	// Health check сервер
 	go func() {
-		serverError <- grpcServer.Serve(listener)
+		errCh <- healthServer.Start()
 	}()
 
-	// Ждем либо завершения контекста (по сигналу), либо ошибки сервера
+	// gRPC сервер
+	go func() {
+		errCh <- grpcServer.Serve(listener)
+	}()
+
+	// Ждем завершения
 	select {
-	case <-ctx.Done():
+	case <-signalCh:
+		log.Info("Shutting down gracefully...")
+
+		// Останавливаем серверы
 		grpcServer.GracefulStop()
-		log.Info("Server stopped gracefully")
-	case err := <-serverError:
+		if err := healthServer.Shutdown(context.Background()); err != nil {
+			log.Error("Health server shutdown error", "error", err)
+		}
+
+	case err := <-errCh:
 		log.Error("Server error", "error", err)
+
+		grpcServer.GracefulStop()
+		if err := healthServer.Shutdown(context.Background()); err != nil {
+			log.Error("Health server shutdown error", "error", err)
+		}
 	}
+
+	log.Info("Server stopped gracefully")
 }
