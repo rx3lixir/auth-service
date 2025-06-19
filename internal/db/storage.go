@@ -23,6 +23,11 @@ type RedisStore struct {
 	client *redis.Client
 }
 
+// GetClient возвращает Redis клиент (для health checks)
+func (s *RedisStore) GetClient() *redis.Client {
+	return s.client
+}
+
 // NewRedisStore создает новое хранилище Redis
 func NewRedisStore(redisURL string, ctx context.Context) (*RedisStore, error) {
 	opts, err := redis.ParseURL(redisURL)

@@ -76,7 +76,7 @@ func main() {
 	log.Info("Server is listening", "address", c.Server.Address)
 
 	// Создаем HealthCheck сервер
-	healthServer := health.NewServer(redisStore, log,
+	healthServer := health.NewServer(redisStore.GetClient(), log,
 		health.WithServiceName("auth-service"),
 		health.WithVersion("1.0.0"),
 		health.WithPort(":8082"),

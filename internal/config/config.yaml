@@ -3,7 +3,7 @@ service_params:
   session_ttl_days: 7 # Хранить сессии 7 дней
   access_token_ttl_mins: 15 # Хранить access-токены 15 минут
 redis_params:
-  url: localhost:6379
+  url: auth-redis:6379
   password: ""
 server_params:
   address: 0.0.0.0:9092
